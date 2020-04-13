@@ -316,6 +316,7 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 
 	// Get roles and projects from the request.
 	user := attributes.GetUser()
+	klog.V(4).Infof("The user info in request: %v", user.GetExtra())
 	userRoles := sets.NewString()
 	if val, ok := user.GetExtra()[Roles]; ok {
 		for _, role := range val {
@@ -336,13 +337,27 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 		}
 	}
 
-	klog.V(4).Infof("Request userRoles: %s, userProjects: %s", userRoles.List(), userProjects.List())
+	userDomains := sets.NewString()
+	if val, ok := user.GetExtra()[DomainName]; ok {
+		for _, domain := range val {
+			userDomains.Insert(domain)
+		}
+	}
+	if val, ok := user.GetExtra()[DomainID]; ok {
+		for _, domain := range val {
+			userDomains.Insert(domain)
+		}
+	}
+
+	klog.V(4).Infof("Request userRoles: %s, userProjects: %s, userDomains: %s",
+		userRoles.List(), userProjects.List(), userDomains.List())
 
 	// The permission is whitelist. Make sure we go through all the policies that match the user roles and projects. If
 	// the operation is allowed explicitly, stop the loop and return "allowed".
 	for _, p := range a.pl {
 		policyRoles := sets.NewString()
 		policyProjects := sets.NewString()
+		policyDomains := sets.NewString()
 
 		if p.Users != nil {
 			if val, ok := p.Users["roles"]; ok {
@@ -356,9 +371,16 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 				}
 			}
 
-			klog.V(4).Infof("policyRoles: %s, policyProjects: %s", policyRoles.List(), policyProjects.List())
+			if val, ok := p.Users["domains"]; ok {
+				for _, domain := range val {
+					policyDomains.Insert(domain)
+				}
+			}
 
-			if !userRoles.IsSuperset(policyRoles) || !policyProjects.HasAny(userProjects.List()...) {
+			klog.V(4).Infof("policyRoles: %s, policyProjects: %s, policyDomains: %s",
+				policyRoles.List(), policyProjects.List(), policyDomains.List())
+
+			if !userRoles.IsSuperset(policyRoles) || !policyProjects.HasAny(userProjects.List()...) || !policyDomains.HasAny(userDomains.List()...) {
 				continue
 			}
 		}
