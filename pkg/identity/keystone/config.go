@@ -26,31 +26,33 @@ import (
 
 // Config configures a keystone webhook server
 type Config struct {
-	Address             string
-	CertFile            string
-	KeyFile             string
-	KeystoneURL         string
-	KeystoneCA          string
-	PolicyFile          string
-	PolicyConfigMapName string
-	SyncConfigFile      string
-	SyncConfigMapName   string
-	Kubeconfig          string
+	Address             	string
+	CertFile            	string
+	KeyFile             	string
+	KeystoneURL         	string
+	KeystoneCA          	string
+	PolicyFile          	string
+	PolicyConfigMapName 	string
+	SyncConfigFile      	string
+	SyncConfigMapName   	string
+	K8sPrivilegeResources	string
+	Kubeconfig          	string
 }
 
 // NewConfig returns a Config
 func NewConfig() *Config {
 	return &Config{
-		Address:             "0.0.0.0:8443",
-		CertFile:            os.Getenv("TLS_CERT_FILE"),
-		KeyFile:             os.Getenv("TLS_PRIVATE_KEY_FILE"),
-		KeystoneURL:         os.Getenv("OS_AUTH_URL"),
-		KeystoneCA:          os.Getenv("KEYSTONE_CA_FILE"),
-		PolicyFile:          os.Getenv("KEYSTONE_POLICY_FILE"),
-		PolicyConfigMapName: os.Getenv("KEYSTONE_POLICY_CONFIGMAP_NAME"),
-		SyncConfigFile:      os.Getenv("KEYSTONE_SYNC_CONFIG_FILE"),
-		SyncConfigMapName:   os.Getenv("KEYSTONE_SYNC_CONFIGMAP_NAME"),
-		Kubeconfig:          os.Getenv("KEYSTONE_KUBECONFIG_FILE"),
+		Address:             	"0.0.0.0:8443",
+		CertFile:            	os.Getenv("TLS_CERT_FILE"),
+		KeyFile:             	os.Getenv("TLS_PRIVATE_KEY_FILE"),
+		KeystoneURL:         	os.Getenv("OS_AUTH_URL"),
+		KeystoneCA:          	os.Getenv("KEYSTONE_CA_FILE"),
+		PolicyFile:          	os.Getenv("KEYSTONE_POLICY_FILE"),
+		PolicyConfigMapName: 	os.Getenv("KEYSTONE_POLICY_CONFIGMAP_NAME"),
+		SyncConfigFile:      	os.Getenv("KEYSTONE_SYNC_CONFIG_FILE"),
+		SyncConfigMapName:   	os.Getenv("KEYSTONE_SYNC_CONFIGMAP_NAME"),
+		K8sPrivilegeResources:	os.Getenv("K8S_PRIVILEGE_RESOURCES"),
+		Kubeconfig:          	os.Getenv("KEYSTONE_KUBECONFIG_FILE"),
 	}
 }
 
@@ -90,5 +92,6 @@ func (c *Config) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&c.PolicyConfigMapName, "policy-configmap-name", c.PolicyConfigMapName, "ConfigMap in kube-system namespace containing the policy configuration, the ConfigMap data must contain the key 'policies'")
 	fs.StringVar(&c.SyncConfigFile, "sync-config-file", c.SyncConfigFile, "File containing config values for data synchronization beetween Keystone and Kubernetes.")
 	fs.StringVar(&c.SyncConfigMapName, "sync-configmap-name", "", "ConfigMap in kube-system namespace containing config values for data synchronization beetween Keystone and Kubernetes.")
+	fs.StringVar(&c.K8sPrivilegeResources, "k8s-privilege-resources", "", "A conjunction of resourceType/resourceName in format '[\"resource/name\"]', these resources will be allowed exceptionally. This parameter is only available in V2.")
 	fs.StringVar(&c.Kubeconfig, "kubeconfig", c.Kubeconfig, "Kubeconfig file used to connect to Kubernetes API to get policy configmap. If the service is running inside the pod, this option is not necessary, will use in-cluster config instead.")
 }

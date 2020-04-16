@@ -475,7 +475,7 @@ func NewKeystoneAuth(c *Config) (*KeystoneAuth, error) {
 
 	keystoneAuth := &KeystoneAuth{
 		authn:     &Authenticator{keystoner: NewKeystoner(keystoneClient)},
-		authz:     &Authorizer{authURL: c.KeystoneURL, client: keystoneClient, pl: policy},
+		authz:     &Authorizer{authURL: c.KeystoneURL, client: keystoneClient, pl: policy, prvres: c.K8sPrivilegeResources},
 		syncer:    &Syncer{k8sClient: k8sClient, syncConfig: sc},
 		k8sClient: k8sClient,
 		config:    c,

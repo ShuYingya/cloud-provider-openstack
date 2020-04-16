@@ -36,6 +36,7 @@ import (
 type Authorizer struct {
 	authURL string
 	client  *gophercloud.ServiceClient
+	prvres  string
 	pl      policyList
 	mu      sync.Mutex
 }
@@ -98,11 +99,49 @@ func getAllowed(definition string, str string) (sets.String, error) {
 	return allowed, nil
 }
 
-func resourcePermissionAllowed(permissionSpec map[string][]string, attr authorizer.Attributes) bool {
+func resourcePermissionAllowed(permissionSpec map[string][]string, attr authorizer.Attributes, prv string) bool {
 	ns := attr.GetNamespace()
 	res := attr.GetResource()
+	name := attr.GetName()
 	verb := attr.GetVerb()
-	klog.V(4).Infof("Request namespace: %s, resource: %s, verb: %s", ns, res, verb)
+    	klog.V(4).Infof("Request namespace: %s, resource: %s, resourceName: %s, verb: %s", ns, res, name, verb)
+
+    	var items []string
+    	if err := json.Unmarshal([]byte(prv), &items); err != nil {
+        	klog.Warningf("Value of 'k8s-privilege-resources' is malformed, this may lead to policy problem.")
+	} else {
+        	resDefList := sets.NewString()
+		nameDefList := sets.NewString()
+        	for key, _ := range permissionSpec {
+			keyList := strings.Split(key, "/")
+			// restrict the resource format as "NameSpace/Resource/ResourceName", for example, "default/storageClass/default"
+			if len(keyList) != 3 {
+				// Ignore this spec
+				klog.V(4).Infof("Skip the permission definition %s", key)
+				continue
+			}
+			resDefList.Insert(strings.TrimSpace(keyList[1]))
+			nameDefList.Insert(strings.TrimSpace(keyList[2]))
+		}
+
+                for _, value := range items {
+	                resList := strings.Split(value, "/")
+        	        if len(resList) != 2 {
+                	    continue
+	                }
+        	        prvRes := resList[0]
+                	prvName := resList[1]
+	                // if the request resources and resourceNames are not in policy, and the request resourceNames
+        	        // are the part of privilege resources， the authorize will be failed.
+                	// for example, if user defines resources "storageclasses/eos" as privilege resource,
+	                // and the policy defines rules as "*/storageclasses/eos" which means user can access storageclasses
+        	        // named eos, the request with resourceName which is not "eos" authorization will get false.
+                	if resDefList.Has(res) && nameDefList.Has(prvName) && res == prvRes && name != prvName {
+				klog.V(4).Infof("Resource %s with Nmae %s Defined in k8s-privilege-resources, resource %s/%s will be skipped. ", prvRes, prvName, res, name)
+                		return false
+                	}
+            	}
+	}
 
 	for key, value := range permissionSpec {
 		klog.V(4).Infof("Evaluating %s: %s", key, value)
@@ -116,13 +155,15 @@ func resourcePermissionAllowed(permissionSpec map[string][]string, attr authoriz
 		}
 
 		keyList := strings.Split(key, "/")
-		if len(keyList) != 2 {
+		// restrict the resource format as "NameSpace/Resource/ResourceName", for example, "default/storageClass/default"
+		if len(keyList) != 3 {
 			// Ignore this spec
 			klog.V(4).Infof("Skip the permission definition %s", key)
 			continue
 		}
 		nsDef := strings.ToLower(strings.TrimSpace(keyList[0]))
 		resDef := strings.ToLower(strings.TrimSpace(keyList[1]))
+		nameDef := strings.ToLower(strings.TrimSpace(keyList[2]))
 
 		allowedNamespaces, err := getAllowed(nsDef, ns)
 		if err != nil {
@@ -134,9 +175,15 @@ func resourcePermissionAllowed(permissionSpec map[string][]string, attr authoriz
 			continue
 		}
 
-		klog.V(4).Infof("allowedNamespaces: %s, allowedResources: %s, allowedVerbs: %s", allowedNamespaces.List(), allowedResources.List(), allowedVerbs.List())
+		allowedNames, err := getAllowed(nameDef, name)
+	        if err != nil {
+        		continue
+        	}
 
-		if allowedNamespaces.Has(ns) && allowedResources.Has(res) && allowedVerbs.Has(verb) {
+        	klog.V(4).Infof("allowedNamespaces: %s, allowedResources: %s, allowedResourceName: %s, allowedVerbs: %s",
+            		allowedNamespaces.List(), allowedResources.List(), allowedNames.List(), allowedVerbs.List())
+
+		if allowedNamespaces.Has(ns) && allowedResources.Has(res) && allowedNames.Has(name) && allowedVerbs.Has(verb) {
 			return true
 		}
 	}
@@ -332,13 +379,27 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 		}
 	}
 
-	klog.V(4).Infof("Request userRoles: %s, userProjects: %s", userRoles.List(), userProjects.List())
+	userDomains := sets.NewString()
+	if val, ok := user.GetExtra()[DomainName]; ok {
+		for _, domain := range val {
+			userDomains.Insert(domain)
+		}
+	}
+	if val, ok := user.GetExtra()[DomainID]; ok {
+		for _, domain := range val {
+			userDomains.Insert(domain)
+		}
+	}
+
+	klog.V(4).Infof("Request userRoles: %s, userProjects: %s, userDomains: %s",
+		userRoles.List(), userProjects.List(), userDomains.List())
 
 	// The permission is whitelist. Make sure we go through all the policies that match the user roles and projects. If
 	// the operation is allowed explicitly, stop the loop and return "allowed".
 	for _, p := range a.pl {
 		policyRoles := sets.NewString()
 		policyProjects := sets.NewString()
+		policyDomains := sets.NewString()
 
 		if p.Users != nil {
 			if val, ok := p.Users["roles"]; ok {
@@ -351,10 +412,17 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 					policyProjects.Insert(project)
 				}
 			}
+			if val, ok := p.Users["domains"]; ok {
+				for _, domain := range val {
+					policyDomains.Insert(domain)
+				}
+			}
 
-			klog.V(4).Infof("policyRoles: %s, policyProjects: %s", policyRoles.List(), policyProjects.List())
+			klog.V(4).Infof("policyRoles: %s, policyProjects: %s, policyDomains: %s",
+				policyRoles.List(), policyProjects.List(), policyDomains.List())
 
-			if !userRoles.IsSuperset(policyRoles) || !policyProjects.HasAny(userProjects.List()...) {
+
+			if !userRoles.IsSuperset(policyRoles) || !policyProjects.HasAny(userProjects.List()...) || !policyDomains.HasAny(userDomains.List()...) {
 				continue
 			}
 		}
@@ -362,7 +430,7 @@ func (a *Authorizer) Authorize(attributes authorizer.Attributes) (authorized aut
 		// ResourcePermissionsSpec and NonResourcePermissionsSpec take precedence over ResourceSpec and NonResourceSpec
 		if attributes.IsResourceRequest() {
 			if p.ResourcePermissionsSpec != nil {
-				if resourcePermissionAllowed(p.ResourcePermissionsSpec, attributes) {
+				if resourcePermissionAllowed(p.ResourcePermissionsSpec, attributes, a.prvres) {
 					return authorizer.DecisionAllow, "", nil
 				}
 			} else if p.ResourceSpec != nil {
